@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap, ZoomControl } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useTrendStore } from '@/lib/store';
 import { fetchTrends, getCategoryColor, generateTrendsForLocation, TrendCategory } from '@/lib/api';
-import { Hash, Users, ExternalLink, TrendingUp, Radio } from 'lucide-react';
+import { ExternalLink, Radio } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -89,12 +89,10 @@ export default function TrendMap() {
         selectedLocation,
         isLoading,
         setLoading,
-        selectedCategory,
         dataMode,
         setDataMode,
     } = useTrendStore();
 
-    const [mapReady, setMapReady] = useState(false);
     const [mountId] = useState(() => `map-${Date.now()}`);
 
     // Fetch trends when location changes
@@ -121,11 +119,9 @@ export default function TrendMap() {
         return () => clearInterval(interval);
     }, [selectedLocation, setTrends, setLoading, setDataMode]);
 
-    // Filter trends
-    const visibleTrends = useMemo(() => {
-        if (selectedCategory === 'all') return trends;
-        return trends.filter(t => t.category === selectedCategory);
-    }, [trends, selectedCategory]);
+    // Map always shows ALL trends — it's a geographic overview, not a filtered list.
+    // Category filtering is handled exclusively in TrendList.
+    const visibleTrends = trends;
 
     return (
         <div className="relative w-full h-full bg-background overflow-hidden rounded-xl border border-white/10 group">
@@ -150,7 +146,7 @@ export default function TrendMap() {
                 zoom={12}
                 className="w-full h-full z-0"
                 zoomControl={false}
-                whenReady={() => setMapReady(true)}
+                whenReady={() => {}}
             >
                 {/* Dark Theme Map Tiles (CartoDB Dark Matter) */}
                 <TileLayer

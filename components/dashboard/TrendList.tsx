@@ -63,7 +63,7 @@ export function TrendList() {
                             initial={{ opacity: 0, x: -20 }}
                             animate={{ opacity: 1, x: 0 }}
                             exit={{ opacity: 0, x: 20 }}
-                            transition={{ delay: i * 0.05 }}
+                            transition={{ duration: 0.15 }}
                             className="group flex items-center justify-between p-3 rounded-lg hover:bg-white/5 border border-transparent hover:border-white/10 transition-all cursor-pointer"
                             onClick={() => window.open(trend.url, '_blank')}
                         >
