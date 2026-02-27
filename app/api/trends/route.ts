@@ -1,113 +1,97 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getTwitterConfig } from '@/lib/config';
+import { getTrends } from '@/lib/twitter-guest';
 import { generateServerTrends } from '@/lib/simulation';
 import { LOCATIONS } from '@/lib/locations';
 
+// ── Server-side trend cache (15-minute TTL per WOEID) ──────────────────────────
+// Prevents hammering Twitter's trends endpoint on every 30-second client refresh.
+const CACHE_TTL_MS = 15 * 60 * 1000;
+type CacheEntry = { data: any[]; expiresAt: number };
+const trendCache = new Map<number, CacheEntry>();
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const woeid = parseInt(searchParams.get('id') || '1');
-  const config = getTwitterConfig();
+  const woeid    = parseInt(searchParams.get('id') || '1');
   const location = LOCATIONS.find(loc => loc.woeid === woeid);
 
-  // If Basic+ tier with bearer token: use Twitter v2 search to approximate trends
-  if (config.capabilities.canSearchTweets && config.bearerToken) {
-    try {
-      const trendData = await fetchTrendsViaSearch(config.bearerToken, location, woeid);
+  // ── Priority 1: Serve from cache if still fresh ──────────────────────────────
+  const cached = trendCache.get(woeid);
+  if (cached && Date.now() < cached.expiresAt) {
+    return NextResponse.json({
+      data: cached.data,
+      meta: { source: 'twitter_guest', tier: 'free', woeid, cached: true },
+    });
+  }
+
+  // ── Priority 2: Twitter guest token (free, zero setup) ──────────────────────
+  try {
+    const rawTrends = await getTrends(woeid);
+    if (rawTrends.length > 0) {
+      const data = normalizeTrends(rawTrends, location, woeid);
+      trendCache.set(woeid, { data, expiresAt: Date.now() + CACHE_TTL_MS });
       return NextResponse.json({
-        data: trendData,
-        meta: { source: 'twitter_v2', tier: config.tier, woeid },
+        data,
+        meta: { source: 'twitter_guest', tier: 'free', woeid, cached: false },
       });
-    } catch (error) {
-      console.error('Twitter API failed, falling back to simulation:', error);
     }
+  } catch (err) {
+    console.error('[trends] Guest token failed:', (err as Error).message);
   }
 
-  // Fallback: server-side simulation
-  const trends = generateServerTrends(woeid, location || null);
+  // ── Priority 2: Seeded simulation (always available) ────────────────────────
   return NextResponse.json({
-    data: trends,
-    meta: { source: 'simulation', tier: config.tier, woeid },
+    data: generateServerTrends(woeid, location || null),
+    meta: { source: 'simulation', tier: 'free', woeid },
   });
 }
 
-async function fetchTrendsViaSearch(bearerToken: string, location: any, woeid: number) {
-  const query = location
-    ? `(${location.name} OR #${location.name.replace(/\s+/g, '')}) -is:retweet lang:en has:hashtags`
-    : '-is:retweet lang:en has:hashtags';
-
-  const url = new URL('https://api.twitter.com/2/tweets/search/recent');
-  url.searchParams.set('query', query);
-  url.searchParams.set('max_results', '100');
-  url.searchParams.set('tweet.fields', 'public_metrics,created_at,author_id,entities');
-  url.searchParams.set('expansions', 'author_id');
-  url.searchParams.set('user.fields', 'description,location,public_metrics,created_at');
-
-  const res = await fetch(url.toString(), {
-    headers: { 'Authorization': `Bearer ${bearerToken}` },
-  });
-
-  if (!res.ok) {
-    const errorBody = await res.json().catch(() => ({}));
-    throw new Error(`Twitter API ${res.status}: ${JSON.stringify(errorBody)}`);
-  }
-
-  const data = await res.json();
-  return aggregateHashtags(data, location, woeid);
-}
-
-function aggregateHashtags(data: any, location: any, woeid: number) {
-  const hashtagCounts: Record<string, { count: number; totalMetrics: number }> = {};
-
-  const tweets = data.data || [];
-  for (const tweet of tweets) {
-    const hashtags = tweet.entities?.hashtags || [];
-    const metrics = tweet.public_metrics || {};
-    const engagement = (metrics.like_count || 0) + (metrics.retweet_count || 0) + (metrics.reply_count || 0);
-
-    for (const ht of hashtags) {
-      const tag = `#${ht.tag}`;
-      if (!hashtagCounts[tag]) {
-        hashtagCounts[tag] = { count: 0, totalMetrics: 0 };
-      }
-      hashtagCounts[tag].count++;
-      hashtagCounts[tag].totalMetrics += engagement;
-    }
-  }
-
+function normalizeTrends(rawTrends: { hashtag: string; volume: number; url: string }[], location: any, woeid: number) {
   const baseLat = location?.lat || 20;
   const baseLng = location?.lng || 0;
 
-  return Object.entries(hashtagCounts)
-    .sort(([, a], [, b]) => b.count - a.count)
-    .slice(0, 15)
-    .map(([hashtag, info], i) => {
-      const estimatedVolume = info.count * 500 + info.totalMetrics * 10;
+  return rawTrends
+    .filter(t => t.hashtag)
+    .slice(0, 20)
+    .map((t, i) => {
+      const volume = t.volume || Math.round(5000 + Math.random() * 95000);
       return {
-        id: `live-${i}-${Date.now()}`,
-        hashtag,
-        title: hashtag.replace('#', '').replace(/([A-Z])/g, ' $1').trim(),
-        tweetVolume: estimatedVolume,
-        category: categorizeHashtag(hashtag),
-        description: `Trending with ~${estimatedVolume.toLocaleString()} estimated volume`,
-        url: `https://twitter.com/search?q=${encodeURIComponent(hashtag)}`,
+        id: `guest-${i}-${woeid}-${Date.now()}`,
+        hashtag: t.hashtag,
+        title: t.hashtag.replace(/^#/, '').replace(/([A-Z])/g, ' $1').trim(),
+        tweetVolume: volume,
+        category: categorize(t.hashtag),
+        description: `Trending on Twitter/X with ${volume.toLocaleString()} tweets`,
+        url: t.url,
         lat: baseLat + (Math.random() - 0.5) * 0.15,
         lng: baseLng + (Math.random() - 0.5) * 0.15,
-        weight: Math.log10(Math.max(estimatedVolume, 100)) / 6,
+        weight: Math.log10(Math.max(volume, 100)) / 6,
         timestamp: new Date().toISOString(),
-        change: Math.round((Math.random() - 0.3) * 50),
-        sentiment: (['positive', 'negative', 'neutral'] as const)[Math.floor(Math.random() * 3)],
+        change: Math.round((Math.random() - 0.3) * 40),
+        sentiment: inferSentiment(t.hashtag),
       };
     });
 }
 
-function categorizeHashtag(hashtag: string): string {
-  const tag = hashtag.toLowerCase();
-  if (tag.match(/(emergency|accident|fire|alert|police|crime|breaking|safety)/)) return 'emergency';
-  if (tag.match(/(pollution|climate|weather|aqi|environment|green|eco|air)/)) return 'environment';
-  if (tag.match(/(election|government|parliament|policy|budget|minister|politics|reform)/)) return 'politics';
-  if (tag.match(/(movie|film|music|entertainment|bollywood|hollywood|streaming|release)/)) return 'entertainment';
-  if (tag.match(/(cricket|ipl|sport|game|match|football|nba|championship|finals)/)) return 'sports';
-  if (tag.match(/(tech|digital|startup|ai|mobile|innovation|software|app)/)) return 'technology';
-  if (tag.match(/(hate|racist|racism|bigot|discrimination|slur|supremac)/)) return 'hate_speech';
+function categorize(hashtag: string): string {
+  const t = hashtag.toLowerCase();
+  if (t.match(/(emergency|accident|fire|alert|police|crime|breaking|safety)/)) return 'emergency';
+  if (t.match(/(pollution|climate|weather|aqi|environment|green|eco|air)/))    return 'environment';
+  if (t.match(/(election|government|parliament|policy|budget|minister|politics|reform)/)) return 'politics';
+  if (t.match(/(movie|film|music|entertainment|bollywood|hollywood|streaming|release)/))  return 'entertainment';
+  if (t.match(/(cricket|ipl|sport|game|match|football|nba|championship|finals)/))        return 'sports';
+  if (t.match(/(tech|digital|startup|ai|mobile|innovation|software|app)/))               return 'technology';
+  if (t.match(/(hate|racist|racism|bigot|discrimination|slur|supremac)/))                return 'hate_speech';
   return 'other';
+}
+
+// Keyword-based sentiment — replaces Math.random() so the value reflects the topic
+function inferSentiment(hashtag: string): 'positive' | 'negative' | 'neutral' {
+  const t = hashtag.toLowerCase();
+  if (t.match(/(accident|fire|crime|breaking|alert|attack|bomb|blast|riot|protest|flood|drought|death|kill|war|terror|hate|racist|discrimination|emergency|unsafe|danger|threat|corrupt|fraud|scam|abuse|violence|murder|disaster|crisis|fail|collapse)/)) {
+    return 'negative';
+  }
+  if (t.match(/(victory|win|success|award|celebrate|launch|progress|growth|good|great|best|top|record|achieve|discover|breakthrough|peace|help|save|clean|safe|love|happy|proud|joy|festival|free|open|new|rise|gain|boom|milestone|hero)/)) {
+    return 'positive';
+  }
+  return 'neutral';
 }
