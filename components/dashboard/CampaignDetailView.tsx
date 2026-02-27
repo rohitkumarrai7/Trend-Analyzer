@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Campaign, FlaggedTweet, CampaignSnapshot } from '@/lib/types/campaign';
 import { LOCATIONS } from '@/lib/locations';
-import { ArrowLeft, AlertTriangle, MapPin, Users, TrendingUp, Clock } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, MapPin, Users, TrendingUp, Clock, RefreshCw, FileDown, Sheet } from 'lucide-react';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
 const COLORS = ['#ef4444', '#f59e0b', '#a855f7', '#06b6d4', '#64748b'];
@@ -16,9 +16,155 @@ interface CampaignDetailViewProps {
     snapshot: CampaignSnapshot | null;
     flaggedTweets: FlaggedTweet[];
     onBack: () => void;
+    onRescan?: () => void;
+    scanLoading?: boolean;
 }
 
-export function CampaignDetailView({ campaign, snapshot, flaggedTweets, onBack }: CampaignDetailViewProps) {
+// ── Export helpers (dynamically imported so they don't bloat the initial bundle) ──
+
+async function exportPDF(campaign: Campaign, flaggedTweets: FlaggedTweet[]) {
+    const { default: jsPDF } = await import('jspdf');
+    const { default: autoTable } = await import('jspdf-autotable');
+
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const now = new Date().toLocaleString();
+
+    // Header
+    doc.setFillColor(30, 30, 50);
+    doc.rect(0, 0, 210, 28, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text('TrendMap — Campaign Report', 14, 12);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Campaign: ${campaign.name}`, 14, 19);
+    doc.text(`Generated: ${now}`, 14, 24);
+
+    // Summary section
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Campaign Summary', 14, 36);
+
+    autoTable(doc, {
+        startY: 40,
+        head: [['Field', 'Value']],
+        body: [
+            ['Status', campaign.status.toUpperCase()],
+            ['Total Flags (all scans)', String(campaign.totalMatches)],
+            ['Keywords', campaign.keywords.join(', ')],
+            ['Hashtags', campaign.hashtags.join(', ') || '—'],
+            ['Monitored Locations', campaign.monitoredLocations.map(w => LOCATIONS.find(l => l.woeid === w)?.name || w).join(', ')],
+            ['Scan Interval', `Every ${campaign.scanInterval ?? 12} hours`],
+            ['Last Scanned', campaign.lastScannedAt ? new Date(campaign.lastScannedAt).toLocaleString() : 'Never'],
+            ['Alert Threshold', `${campaign.alertThreshold} flags/hr`],
+        ],
+        headStyles: { fillColor: [99, 102, 241], textColor: 255, fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [245, 245, 252] },
+        styles: { fontSize: 9, cellPadding: 3 },
+    });
+
+    if (flaggedTweets.length > 0) {
+        const afterSummary = (doc as any).lastAutoTable.finalY + 10;
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.text(`Flagged Content (${flaggedTweets.length} tweets)`, 14, afterSummary);
+
+        autoTable(doc, {
+            startY: afterSummary + 4,
+            head: [['#', 'Tweet Text', 'Author', 'Location', 'Score', 'Categories', 'Likes', 'RTs']],
+            body: flaggedTweets.map((t, i) => [
+                String(i + 1),
+                t.text.substring(0, 120) + (t.text.length > 120 ? '…' : ''),
+                `@${t.authorId}`,
+                t.authorLocation || '—',
+                `${Math.round(t.hateSpeechScore * 100)}%`,
+                t.categories.join(', ') || '—',
+                String(t.metrics?.likes ?? 0),
+                String(t.metrics?.retweets ?? 0),
+            ]),
+            headStyles: { fillColor: [249, 115, 22], textColor: 255, fontStyle: 'bold' },
+            alternateRowStyles: { fillColor: [255, 248, 244] },
+            styles: { fontSize: 7.5, cellPadding: 2 },
+            columnStyles: {
+                0: { cellWidth: 8 },
+                1: { cellWidth: 70 },
+                2: { cellWidth: 22 },
+                3: { cellWidth: 22 },
+                4: { cellWidth: 12 },
+                5: { cellWidth: 28 },
+                6: { cellWidth: 12 },
+                7: { cellWidth: 12 },
+            },
+        });
+    }
+
+    // Footer on each page
+    const pageCount = doc.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i);
+        doc.setFontSize(7);
+        doc.setTextColor(150, 150, 150);
+        doc.text(`TrendMap Campaign Report — ${campaign.name} — Page ${i} of ${pageCount}`, 14, 292);
+    }
+
+    doc.save(`trendmap-campaign-${campaign.name.replace(/\s+/g, '-').toLowerCase()}-${Date.now()}.pdf`);
+}
+
+async function exportExcel(campaign: Campaign, flaggedTweets: FlaggedTweet[]) {
+    const XLSX = await import('xlsx');
+
+    const summarySheet = XLSX.utils.aoa_to_sheet([
+        ['TrendMap Campaign Report'],
+        ['Generated', new Date().toLocaleString()],
+        [],
+        ['Field', 'Value'],
+        ['Campaign Name', campaign.name],
+        ['Description', campaign.description || '—'],
+        ['Status', campaign.status],
+        ['Total Flags', campaign.totalMatches],
+        ['Keywords', campaign.keywords.join(', ')],
+        ['Hashtags', campaign.hashtags.join(', ') || '—'],
+        ['Locations', campaign.monitoredLocations.map(w => LOCATIONS.find(l => l.woeid === w)?.name || w).join(', ')],
+        ['Scan Interval (hours)', campaign.scanInterval ?? 12],
+        ['Last Scanned', campaign.lastScannedAt ? new Date(campaign.lastScannedAt).toLocaleString() : 'Never'],
+        ['Alert Threshold', campaign.alertThreshold],
+    ]);
+
+    const tweetsData = [
+        ['#', 'Tweet Text', 'Author Handle', 'Author Location', 'Author Bio', 'Hate Score (%)', 'Categories', 'Severity', 'Likes', 'Retweets', 'Replies', 'Created At'],
+        ...flaggedTweets.map((t, i) => [
+            i + 1,
+            t.text,
+            `@${t.authorId}`,
+            t.authorLocation || '',
+            t.authorBio || '',
+            Math.round(t.hateSpeechScore * 100),
+            t.categories.join(', '),
+            t.hateSpeechScore > 0.7 ? 'High' : t.hateSpeechScore > 0.4 ? 'Medium' : 'Low',
+            t.metrics?.likes ?? 0,
+            t.metrics?.retweets ?? 0,
+            t.metrics?.replies ?? 0,
+            t.createdAt || '',
+        ]),
+    ];
+    const tweetsSheet = XLSX.utils.aoa_to_sheet(tweetsData);
+
+    // Auto column widths
+    tweetsSheet['!cols'] = [
+        { wch: 4 }, { wch: 80 }, { wch: 20 }, { wch: 20 }, { wch: 30 },
+        { wch: 12 }, { wch: 25 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 20 },
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
+    XLSX.utils.book_append_sheet(wb, tweetsSheet, 'Flagged Tweets');
+
+    XLSX.writeFile(wb, `trendmap-campaign-${campaign.name.replace(/\s+/g, '-').toLowerCase()}-${Date.now()}.xlsx`);
+}
+
+export function CampaignDetailView({ campaign, snapshot, flaggedTweets, onBack, onRescan, scanLoading }: CampaignDetailViewProps) {
     const categoryData = snapshot
         ? Object.entries(snapshot.matchesByCategory).map(([name, value]) => ({ name, value }))
         : [];
@@ -65,9 +211,46 @@ export function CampaignDetailView({ campaign, snapshot, flaggedTweets, onBack }
                     <h1 className="text-2xl font-bold">{campaign.name}</h1>
                     <p className="text-sm text-muted-foreground">{campaign.description}</p>
                 </div>
-                <Badge variant={campaign.status === 'active' ? 'default' : 'secondary'}>
-                    {campaign.status}
-                </Badge>
+                <div className="flex items-center gap-2 flex-wrap">
+                    <Badge variant={campaign.status === 'active' ? 'default' : 'secondary'}>
+                        {campaign.status}
+                    </Badge>
+                    {/* Export buttons — only show when there's data */}
+                    {flaggedTweets.length > 0 && (
+                        <>
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => exportExcel(campaign, flaggedTweets)}
+                                className="text-xs gap-1.5 text-green-400 border-green-500/30 hover:bg-green-500/10"
+                            >
+                                <Sheet className="w-3 h-3" />
+                                Excel
+                            </Button>
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => exportPDF(campaign, flaggedTweets)}
+                                className="text-xs gap-1.5 text-red-400 border-red-500/30 hover:bg-red-500/10"
+                            >
+                                <FileDown className="w-3 h-3" />
+                                PDF
+                            </Button>
+                        </>
+                    )}
+                    {onRescan && (
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={onRescan}
+                            disabled={scanLoading}
+                            className="text-xs gap-1.5"
+                        >
+                            <RefreshCw className={`w-3 h-3 ${scanLoading ? 'animate-spin' : ''}`} />
+                            {scanLoading ? 'Scanning...' : 'Re-scan'}
+                        </Button>
+                    )}
+                </div>
             </div>
 
             {/* Summary Cards */}

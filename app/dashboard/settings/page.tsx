@@ -2,143 +2,116 @@
 
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ApiKeyDialog } from '@/components/dashboard/ApiKeyDialog';
+import { Bell, Globe, Cpu, CheckCircle, XCircle, X } from 'lucide-react';
 import { useTrendStore } from '@/lib/store';
-import { Shield, Key, Bell, Globe, Cpu, CheckCircle, XCircle, ExternalLink } from 'lucide-react';
 
 export default function SettingsPage() {
-    const [isDialogOpen, setIsDialogOpen] = useState(false);
-    const { apiKey, dataMode, apiTier, setApiTier, setDataMode } = useTrendStore();
-    const [apiStatus, setApiStatus] = useState<any>(null);
+    const { dataMode } = useTrendStore();
+    const [status, setStatus] = useState<any>(null);
 
     useEffect(() => {
         fetch('/api/status')
             .then(res => res.json())
-            .then(data => {
-                setApiStatus(data);
-                if (data.twitter?.tier) setApiTier(data.twitter.tier);
-            })
+            .then(data => setStatus(data))
             .catch(() => {});
-    }, [setApiTier]);
+    }, []);
 
     return (
         <div className="max-w-4xl mx-auto space-y-8">
             <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
 
-            {/* API Configuration */}
+            {/* Twitter data source */}
             <Card>
                 <CardHeader>
                     <div className="flex items-center gap-2">
-                        <Key className="w-5 h-5 text-primary" />
-                        <CardTitle>Twitter/X API Configuration</CardTitle>
+                        <X className="w-5 h-5 text-sky-400" />
+                        <CardTitle>Twitter/X Data Source</CardTitle>
                     </div>
-                    <CardDescription>Manage your connection to Twitter/X API v2.</CardDescription>
+                    <CardDescription>
+                        Uses Twitter's own guest token API — the same method twitter.com uses for
+                        unauthenticated browsing. No API key, no account, no cost.
+                    </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                    {/* Server-side key status */}
+                <CardContent className="space-y-3">
                     <div className="flex items-center justify-between p-4 bg-white/5 rounded-lg border border-white/10">
                         <div>
                             <div className="font-medium flex items-center gap-2">
-                                Server API Key
-                                {apiStatus?.twitter?.configured ? (
+                                Guest Token API
+                                {status === null ? null : status?.twitter?.working ? (
                                     <CheckCircle className="w-4 h-4 text-green-400" />
                                 ) : (
                                     <XCircle className="w-4 h-4 text-red-400" />
                                 )}
                             </div>
-                            <div className={`text-sm ${apiStatus?.twitter?.configured ? 'text-green-400' : 'text-yellow-400'}`}>
-                                {apiStatus?.twitter?.configured ? 'Configured in .env.local' : 'Not configured — set TWITTER_BEARER_TOKEN in .env.local'}
+                            <div className={`text-sm ${status?.twitter?.working ? 'text-green-400' : 'text-yellow-400'}`}>
+                                {status === null ? 'Checking...' : status?.twitter?.note}
                             </div>
                         </div>
-                        <Badge variant="secondary" className="capitalize">
-                            {apiStatus?.twitter?.tier || 'free'} tier
+                        <Badge variant={status?.twitter?.working ? 'default' : 'secondary'}>
+                            {status === null ? '...' : status?.twitter?.working ? 'Live' : 'Fallback'}
                         </Badge>
                     </div>
 
-                    {/* Client-side key (backward compat) */}
-                    <div className="flex items-center justify-between p-4 bg-white/5 rounded-lg border border-white/10">
-                        <div>
-                            <div className="font-medium">Browser API Key</div>
-                            <div className={`text-sm ${apiKey ? 'text-green-400' : 'text-muted-foreground'}`}>
-                                {apiKey ? 'Connected via browser' : 'Not set (optional)'}
-                            </div>
-                        </div>
-                        <Button onClick={() => setIsDialogOpen(true)} variant="outline" size="sm">
-                            {apiKey ? 'Update Key' : 'Connect API'}
-                        </Button>
+                    <div className="p-3 bg-sky-500/5 border border-sky-500/20 rounded-lg text-xs text-sky-200/80 space-y-1">
+                        <div className="font-medium text-sky-300">How it works — zero setup</div>
+                        <ul className="list-disc list-inside space-y-0.5">
+                            <li>Twitter issues short-lived guest tokens for unauthenticated browsing</li>
+                            <li>We call the same internal search API that twitter.com uses</li>
+                            <li>Tokens auto-refresh every 3 hours — fully automatic</li>
+                            <li>Twitter cannot block this without breaking their own embed widgets</li>
+                        </ul>
                     </div>
 
-                    {/* Tier capabilities */}
-                    {apiStatus?.twitter?.capabilities && (
-                        <div className="p-4 bg-white/5 rounded-lg border border-white/10">
-                            <div className="font-medium mb-3">Tier Capabilities</div>
-                            <div className="grid grid-cols-2 gap-2">
-                                {Object.entries(apiStatus.twitter.capabilities).map(([key, value]) => (
-                                    <div key={key} className="flex items-center gap-2 text-sm">
-                                        {value ? (
-                                            <CheckCircle className="w-3.5 h-3.5 text-green-400" />
-                                        ) : (
-                                            <XCircle className="w-3.5 h-3.5 text-red-400/50" />
-                                        )}
-                                        <span className={value ? 'text-foreground' : 'text-muted-foreground'}>
-                                            {key.replace(/([A-Z])/g, ' $1').replace(/^can /, '').trim()}
-                                        </span>
-                                    </div>
-                                ))}
-                            </div>
-                            <a
-                                href="https://developer.twitter.com/en/portal/products"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-xs text-indigo-400 hover:text-indigo-300 mt-3 inline-flex items-center gap-1"
-                            >
-                                Upgrade your API tier <ExternalLink className="w-3 h-3" />
-                            </a>
-                        </div>
-                    )}
+                    <div className="text-xs text-muted-foreground">
+                        Active source:{' '}
+                        <span className="font-medium text-foreground">
+                            {status?.activeSource === 'twitter_guest'
+                                ? 'Twitter Guest API (real tweets — authentic)'
+                                : 'Simulation (guest API will auto-retry)'}
+                        </span>
+                    </div>
                 </CardContent>
             </Card>
 
-            {/* LLM Configuration */}
+            {/* LLM */}
             <Card>
                 <CardHeader>
                     <div className="flex items-center gap-2">
                         <Cpu className="w-5 h-5 text-primary" />
-                        <CardTitle>AI Analysis (LLM)</CardTitle>
+                        <CardTitle>AI Hate Speech Analysis</CardTitle>
                     </div>
-                    <CardDescription>Configure AI-powered hate speech analysis for campaigns.</CardDescription>
+                    <CardDescription>Emotion-based LLM analysis for campaign scans.</CardDescription>
                 </CardHeader>
                 <CardContent>
                     <div className="flex items-center justify-between p-4 bg-white/5 rounded-lg border border-white/10">
                         <div>
                             <div className="font-medium flex items-center gap-2">
                                 LLM Provider
-                                {apiStatus?.llm?.configured ? (
+                                {status?.llm?.configured ? (
                                     <CheckCircle className="w-4 h-4 text-green-400" />
                                 ) : (
                                     <XCircle className="w-4 h-4 text-muted-foreground" />
                                 )}
                             </div>
                             <div className="text-sm text-muted-foreground">
-                                {apiStatus?.llm?.configured
-                                    ? `${apiStatus.llm.provider} configured`
-                                    : 'Set LLM_PROVIDER and LLM_API_KEY in .env.local for AI analysis'
-                                }
+                                {status?.llm?.configured
+                                    ? `${status.llm.provider} · ${status.llm.model}`
+                                    : 'Set LLM_PROVIDER + LLM_API_KEY in .env.local'}
                             </div>
                         </div>
-                        <Badge variant="secondary">
-                            {apiStatus?.llm?.configured ? 'Active' : 'Dictionary Only'}
+                        <Badge variant={status?.llm?.configured ? 'default' : 'secondary'}>
+                            {status?.llm?.configured ? 'Active' : 'Dictionary Only'}
                         </Badge>
                     </div>
                     <p className="text-xs text-muted-foreground mt-3">
-                        Without an LLM, campaigns use keyword-based detection. Add an OpenAI or Anthropic API key for more nuanced hate speech analysis.
+                        OpenRouter free tier (<code className="bg-black/30 px-1 rounded">arcee-ai/trinity-large-preview:free</code>)
+                        works at zero cost. Without it, campaign scans fall back to keyword-based detection.
                     </p>
                 </CardContent>
             </Card>
 
-            {/* Data Mode */}
+            {/* Data mode */}
             <Card>
                 <CardHeader>
                     <div className="flex items-center gap-2">
@@ -159,7 +132,7 @@ export default function SettingsPage() {
                         </Badge>
                     </div>
                     <p className="text-xs text-muted-foreground mt-3">
-                        Data mode is automatically determined by your API tier. Free tier uses simulation; Basic+ tier fetches real data.
+                        Switches to live automatically when the Twitter guest API is reachable.
                     </p>
                 </CardContent>
             </Card>
@@ -185,8 +158,6 @@ export default function SettingsPage() {
                     <p className="text-xs text-muted-foreground mt-4">* Email alerts coming soon</p>
                 </CardContent>
             </Card>
-
-            <ApiKeyDialog isOpen={isDialogOpen} onClose={() => setIsDialogOpen(false)} />
         </div>
     );
 }
