@@ -27,6 +27,18 @@ export function getLLMConfig() {
   return {
     provider,
     apiKey: process.env.LLM_API_KEY || null,
-    model: process.env.LLM_MODEL || (provider === 'openrouter' ? 'arcee-ai/trinity-large-preview:free' : null),
+    model: process.env.LLM_MODEL || (
+      provider === 'openrouter' ? 'arcee-ai/trinity-large-preview:free'
+      : provider === 'anthropic' ? 'claude-sonnet-4-6'
+      : provider === 'openai' ? 'gpt-4o-mini'
+      : null
+    ),
   };
+}
+
+// ─── RapidAPI (kept as optional backup — not used by default) ─────────────────
+export function getRapidApiConfig() {
+  const key = process.env.RAPIDAPI_KEY || null;
+  const host = process.env.RAPIDAPI_HOST || 'twitter-api45.p.rapidapi.com';
+  return { key, host, configured: !!key };
 }
