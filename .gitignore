@@ -34,9 +34,6 @@ ant
 *.tsbuildinfo
 next-env.d.ts
 
-# Convex generated files (auto-generated, do not commit)
-convex/_generated/
-
 # IDE specific files
 .idea
 .vscode
