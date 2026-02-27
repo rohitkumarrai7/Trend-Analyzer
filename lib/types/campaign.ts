@@ -13,6 +13,8 @@ export interface Campaign {
   snapshots: CampaignSnapshot[];
   alertThreshold: number;
   alertEnabled: boolean;
+  scanInterval?: number;    // hours between auto-scans (12 or 24)
+  lastScannedAt?: string;   // ISO timestamp
 }
 
 export interface FlaggedTweet {
